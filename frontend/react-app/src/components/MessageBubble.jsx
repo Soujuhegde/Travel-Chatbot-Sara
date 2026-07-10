@@ -166,7 +166,7 @@ const MessageBubble = ({ message, onQuickReply, onOptionSelect }) => {
               <button 
                 key={i} 
                 onClick={() => onQuickReply && onQuickReply(reply)}
-                className="px-5 py-2.5 bg-slate-50 border border-slate-200 text-slate-600 hover:bg-indigo-50/50 hover:border-indigo-200 hover:text-indigo-600 rounded-full text-sm font-semibold shadow-sm transform hover:-translate-y-0.5 active:translate-y-0 active:scale-95 transition-all duration-150"
+                className="px-6 py-3 bg-slate-50 border border-slate-200 text-slate-600 hover:bg-indigo-50/50 hover:border-indigo-200 hover:text-indigo-600 rounded-full text-[16px] md:text-[17px] font-semibold shadow-sm transform hover:-translate-y-0.5 active:translate-y-0 active:scale-95 transition-all duration-150"
               >
                 {reply}
               </button>
