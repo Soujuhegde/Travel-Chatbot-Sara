@@ -81,6 +81,56 @@ const ChatInterface = () => {
     "I want to go to Tokyo in June"
   ];
 
+  const isInitialState = messages.length === 1;
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good morning";
+    if (hour < 18) return "Good afternoon";
+    return "Good evening";
+  };
+
+  if (isInitialState) {
+    return (
+      <div className="flex flex-col h-full bg-slate-50/50 items-center justify-center p-6">
+        <div className="w-full max-w-3xl flex flex-col items-center animate-fade-in-up">
+          <h2 className="text-4xl font-serif text-gray-800 mb-8">{getGreeting()}, how can I help you?</h2>
+          
+          <form onSubmit={handleSend} className="relative flex items-center w-full mb-8 shadow-lg rounded-full">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Where would you like to travel today?"
+              className="w-full pl-8 pr-16 py-5 rounded-full border border-gray-200 focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none text-gray-700 text-lg transition-all"
+              disabled={isTyping}
+            />
+            <button
+              type="submit"
+              disabled={!input.trim() || isTyping}
+              className="absolute right-3 p-3.5 bg-brand text-white rounded-full hover:bg-brand-dark disabled:opacity-50 disabled:hover:bg-brand transition-colors shadow-md"
+            >
+              <Send className="w-6 h-6" />
+            </button>
+          </form>
+
+          <div className="flex flex-wrap justify-center gap-3 w-full">
+            {samplePrompts.map((prompt, idx) => (
+              <button
+                key={idx}
+                onClick={() => setInput(prompt)}
+                className="px-5 py-2.5 bg-white border border-gray-200 text-gray-600 rounded-full text-sm font-medium hover:bg-gray-50 transition-colors flex items-center gap-2 shadow-sm"
+              >
+                <MapPin className="w-4 h-4 text-brand" />
+                {prompt}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-slate-50/50">
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
@@ -103,19 +153,6 @@ const ChatInterface = () => {
       </div>
 
       <div className="p-4 bg-white border-t border-slate-200">
-        <div className="flex gap-2 mb-4 overflow-x-auto pb-2 scrollbar-hide">
-          {messages.length === 1 && samplePrompts.map((prompt, idx) => (
-            <button
-              key={idx}
-              onClick={() => setInput(prompt)}
-              className="whitespace-nowrap px-4 py-2 bg-brand-light text-brand-dark rounded-full text-sm font-medium hover:bg-orange-200 transition-colors flex items-center gap-2"
-            >
-              <MapPin className="w-4 h-4" />
-              {prompt}
-            </button>
-          ))}
-        </div>
-        
         <form onSubmit={handleSend} className="relative flex items-center">
           <input
             type="text"
