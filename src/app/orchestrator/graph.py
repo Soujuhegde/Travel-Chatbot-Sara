@@ -39,6 +39,7 @@ class ConversationState(TypedDict):
     clarification_repeats: Dict[str, int] | None
     followup_message: str | None
     followup_quick_replies: List[str] | None
+    serpapi_calls: List[Dict[str, Any]] | None
 
 def route_next(state: ConversationState):
     step = state.get("current_step")

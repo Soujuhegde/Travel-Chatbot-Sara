@@ -234,4 +234,20 @@ def hotel_node(state: Dict[str, Any]) -> Dict[str, Any]:
             options.append(r)
             
     final_text = "Here are some great hotels for your stay. Click to choose your preferred one." if options else "Sorry, we could not find any hotels for those dates."
-    return {"final_response": final_text, "options_to_show": options[:3], "quick_replies": [], "hotel_result": response.model_dump(), "current_step": "hotel_selecting"}
+    
+    serpapi_calls = state.get("serpapi_calls") or []
+    if response.metadata.get("serpapi_request"):
+        serpapi_calls.append({
+            "engine": "google_hotels",
+            "request": response.metadata.get("serpapi_request"),
+            "response": response.metadata.get("serpapi_response")
+        })
+        
+    return {
+        "final_response": final_text, 
+        "options_to_show": options[:3], 
+        "quick_replies": [], 
+        "hotel_result": response.model_dump(), 
+        "current_step": "hotel_selecting",
+        "serpapi_calls": serpapi_calls
+    }

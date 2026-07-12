@@ -166,4 +166,20 @@ def flight_node(state: Dict[str, Any]) -> Dict[str, Any]:
             options.append(r)
             
     final_text = "Here are the flight options. Click to choose your preferred one." if options else "Sorry, we do not have any flights available on the searched date."
-    return {"final_response": final_text, "options_to_show": options, "quick_replies": [], "flight_result": response.model_dump(), "current_step": "flight_selecting"}
+    
+    serpapi_calls = state.get("serpapi_calls") or []
+    if response.metadata.get("serpapi_request"):
+        serpapi_calls.append({
+            "engine": "google_flights",
+            "request": response.metadata.get("serpapi_request"),
+            "response": response.metadata.get("serpapi_response")
+        })
+        
+    return {
+        "final_response": final_text, 
+        "options_to_show": options, 
+        "quick_replies": [], 
+        "flight_result": response.model_dump(), 
+        "current_step": "flight_selecting",
+        "serpapi_calls": serpapi_calls
+    }

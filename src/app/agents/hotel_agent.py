@@ -17,6 +17,8 @@ def call_hotel_agent(request: TaskRequest) -> TaskResponse:
         
     api_key = os.getenv("SERPAPI_API_KEY")
     results = []
+    serpapi_request_info = None
+    serpapi_response_data = None
     
     if api_key:
         try:
@@ -44,9 +46,15 @@ def call_hotel_agent(request: TaskRequest) -> TaskResponse:
                     min_p = int(prices[0].replace(",", ""))
                     req_params["min_price"] = min_p
             
+            serpapi_request_info = {
+                "url": url,
+                "params": {k: v for k, v in req_params.items() if k != "api_key"}
+            }
+
             response = httpx.get(url, params=req_params, timeout=15.0)
             response.raise_for_status()
             data = response.json()
+            serpapi_response_data = data
             
             properties = data.get("properties", [])
             for p in properties:
@@ -99,9 +107,19 @@ def call_hotel_agent(request: TaskRequest) -> TaskResponse:
         if fallback.get("status") == "success":
             results = fallback.get("results", [])
             
+    metadata = {
+        "agent_id": "hotel_agent",
+        "timestamp": time.time(),
+        "source": "serpapi" if api_key and results else "mock"
+    }
+    if serpapi_request_info:
+        metadata["serpapi_request"] = serpapi_request_info
+    if serpapi_response_data:
+        metadata["serpapi_response"] = serpapi_response_data
+
     return TaskResponse(
         task_id=request.task_id,
         status="success" if results else "failed",
         results=results,
-        metadata={"agent_id": "hotel_agent", "timestamp": time.time(), "source": "serpapi" if api_key and results else "mock"}
+        metadata=metadata
     )

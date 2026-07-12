@@ -46,8 +46,12 @@ async def chat_endpoint(request: ChatRequest):
         "flight_result": None,
         "hotel_result": None,
         "final_response": None,
-        "options_to_show": []
+        "options_to_show": [],
+        "serpapi_calls": []
     })
+    
+    # Reset serpapi calls list for this turn
+    state["serpapi_calls"] = []
     
     # Add new message
     state["messages"].append(HumanMessage(content=request.message))
@@ -90,6 +94,40 @@ async def chat_endpoint(request: ChatRequest):
     ]
     clarification_needed = new_state.get("pending_clarification") or is_clarifying
     quick_replies = new_state.get("quick_replies", [])
+
+    # Write the actual request and response of this turn to a JSON file
+    try:
+        import json
+        from datetime import datetime
+        log_data = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "chatbot_api": {
+                "request": {
+                    "message": request.message,
+                    "session_id": session_id
+                },
+                "response": {
+                    "message": final_resp,
+                    "options": options_to_show,
+                    "clarification_needed": bool(clarification_needed),
+                    "quick_replies": quick_replies,
+                    "ticket": ticket,
+                    "followup_message": followup_msg,
+                    "followup_quick_replies": followup_replies,
+                    "current_flow": current_flow
+                }
+            },
+            "serpapi_calls": new_state.get("serpapi_calls") or []
+        }
+        import os
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(base_dir, "../../../"))
+        log_filepath = os.path.join(project_root, "chat_req_resp.json")
+        with open(log_filepath, "w", encoding="utf-8") as f:
+            json.dump(log_data, f, indent=2, ensure_ascii=False)
+        print(f"Logged current interaction to {log_filepath}")
+    except Exception as e:
+        print(f"Error logging interaction to JSON: {e}")
 
     return ChatResponse(
         message=final_resp,

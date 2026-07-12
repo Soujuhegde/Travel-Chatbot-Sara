@@ -9,8 +9,8 @@ from app.orchestrator.flight_flow import get_next_flight_step
 
 class ExtractedInfo(BaseModel):
     intent: Literal["book_flight", "book_hotel", "general_qa", "select_flight", "select_hotel", "provide_details", "payment_done", "provide_passenger_count", "confirm", "reject"] = "general_qa"
-    origin: str | None = None
-    destination: str | None = None
+    origin: str | None = Field(description="The 3-letter IATA code of the origin city or airport (e.g. 'BLR', 'DEL', 'JFK', 'TYO'). ALWAYS convert full city or country names to their primary 3-letter IATA code.", default=None)
+    destination: str | None = Field(description="The 3-letter IATA code of the destination city or airport (e.g. 'BLR', 'DEL', 'JFK', 'TYO'). ALWAYS convert full city or country names to their primary 3-letter IATA code.", default=None)
     departure_date: str | None = None
     limit: int | None = Field(description="The number of flights the user wants to see, if they explicitly mention a number (e.g. 'show me 5 flights').", default=None)
     journey_type: Literal["One Way", "Round Trip"] | None = None
@@ -199,10 +199,9 @@ def parse_intent(state: Dict[str, Any]) -> Dict[str, Any]:
     if result.check_out_date and (not hotel_params.get("check_out_date") or step == "hotel_awaiting_check_out"): 
         hotel_params["check_out_date"] = result.check_out_date
     
-    # Only accept departure_date when we are at a flight detail-gathering step.
-    # Prevents pre-filling from initial messages (e.g. "Flights to Goa this weekend")
-    # which would skip the departure date question.
-    _date_accepting_steps = {"awaiting_departure_date", "invalid_departure_date", "awaiting_origin_dest"}
+    # Only accept departure_date when we are at a flight detail-gathering step or at the start.
+    # Prevents pre-filling from initial messages only if they are not flight intents, but we allow them now.
+    _date_accepting_steps = {"awaiting_departure_date", "invalid_departure_date", "awaiting_origin_dest", "start", "general_qa", None}
     invalid_date = False
     if result.departure_date and step in _date_accepting_steps:
         try:
@@ -215,11 +214,8 @@ def parse_intent(state: Dict[str, Any]) -> Dict[str, Any]:
         except ValueError:
             flight_params["departure_date"] = result.departure_date
 
-    # Accept journey_type when already inside the flight-gathering flow,
-    # but NOT from the very first/initial message (step is None or "start").
-    # This prevents "Flights to Goa this weekend" from pre-filling journey_type
-    # and skipping the One Way/Round Trip question entirely.
-    _journey_accepting_steps = {"awaiting_origin_dest", "awaiting_departure_date", "invalid_departure_date", "awaiting_journey_type"}
+    # Accept journey_type when inside the flight flow or from the initial message
+    _journey_accepting_steps = {"awaiting_origin_dest", "awaiting_departure_date", "invalid_departure_date", "awaiting_journey_type", "start", "general_qa", None}
     if result.journey_type and step in _journey_accepting_steps:
         flight_params["journey_type"] = result.journey_type
     

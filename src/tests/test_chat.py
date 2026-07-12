@@ -277,3 +277,39 @@ def test_conversational_selection_and_interruption(mock_llm, mock_serp):
     # It should transition to awaiting passenger count
     assert data["clarification_needed"] is True
     assert "How many adults, children, and infants" in data["message"]
+
+
+def test_initial_message_prefilling(mock_llm, mock_serp):
+    session_id = "test_session_id_prefilling"
+    
+    # User provides origin, destination, and departure_date in the initial query
+    mock_llm.parse_intent.return_value = ExtractedIntent(
+        intent="book_flight",
+        origin="BLR",
+        destination="DEL",
+        departure_date="2026-08-15"
+    )
+    
+    # Mock the search response
+    mock_serp["flight"].search_flights.return_value = [
+        FlightOption(
+            airline="Mock Airlines",
+            flight_number="MK123",
+            depart_time="10:00 AM",
+            arrive_time="02:00 PM",
+            duration=240,
+            price=250.0,
+            stops=0
+        )
+    ]
+    
+    response = client.post("/api/chat", json={"session_id": session_id, "message": "Book a flight from BLR to DEL on 2026-08-15"})
+    assert response.status_code == 200
+    data = response.json()
+    # It should search flights immediately since all details are prefilled!
+    assert data["clarification_needed"] is False
+    assert data["options"] is not None
+    assert len(data["options"]) == 1
+    assert data["options"][0]["airline_name"] == "Mock Airlines"
+    assert "flight options" in data["message"]
+

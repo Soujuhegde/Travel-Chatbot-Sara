@@ -17,9 +17,89 @@ def format_date(time_str: str) -> str:
     except:
         return time_str
 
+def sanitize_iata_code(name: str) -> str:
+    if not name:
+        return name
+    name_clean = name.strip().lower()
+    iata_mapping = {
+        # Countries (names & ISO 3-letter codes)
+        "japan": "NRT",
+        "jpn": "NRT",
+        "india": "DEL",
+        "ind": "DEL",
+        "united states": "JFK",
+        "usa": "JFK",
+        "united kingdom": "LHR",
+        "gbr": "LHR",
+        "france": "CDG",
+        "germany": "FRA",
+        "deu": "FRA",
+        "thailand": "BKK",
+        "tha": "BKK",
+        "malaysia": "KUL",
+        "mys": "KUL",
+        "australia": "SYD",
+        "aus": "SYD",
+        "indonesia": "CGK",
+        "idn": "CGK",
+        "vietnam": "SGN",
+        "vnm": "SGN",
+        "maldives": "MLE",
+        "mdv": "MLE",
+        "sri lanka": "CMB",
+        "lka": "CMB",
+        
+        # Cities & synonyms
+        "tokyo": "NRT",
+        "singapore": "SIN",
+        "pune": "PNQ",
+        "mumbai": "BOM",
+        "bombay": "BOM",
+        "delhi": "DEL",
+        "new delhi": "DEL",
+        "bangalore": "BLR",
+        "bengaluru": "BLR",
+        "hyderabad": "HYD",
+        "chennai": "MAA",
+        "madras": "MAA",
+        "kolkata": "CCU",
+        "calcutta": "CCU",
+        "goa": "GOI",
+        "jaipur": "JAI",
+        "dubai": "DXB",
+        "bangkok": "BKK",
+        "paris": "CDG",
+        "london": "LHR",
+        "new york": "JFK",
+        "los angeles": "LAX",
+        "san francisco": "SFO",
+        "chicago": "ORD",
+        "kuala lumpur": "KUL",
+        "sydney": "SYD",
+        "melbourne": "MEL",
+        "jakarta": "CGK",
+        "bali": "DPS",
+        "denpasar": "DPS",
+        "ho chi minh": "SGN",
+        "hanoi": "HAN",
+        "male": "MLE",
+        "colombo": "CMB",
+        "toronto": "YYZ",
+        "vancouver": "YVR"
+    }
+    if name_clean in iata_mapping:
+        return iata_mapping[name_clean]
+    if len(name_clean) == 3 and name_clean.isalpha():
+        return name_clean.upper()
+    return name.upper()
+
 def call_flight_agent(request: TaskRequest) -> TaskResponse:
     params = request.parameters
-    if not params.get("origin") or not params.get("destination") or not params.get("departure_date"):
+    
+    origin = sanitize_iata_code(params.get("origin"))
+    destination = sanitize_iata_code(params.get("destination"))
+    
+    if not origin or not destination or not params.get("departure_date"):
         return TaskResponse(
             task_id=request.task_id,
             status="needs_clarification",
@@ -29,14 +109,16 @@ def call_flight_agent(request: TaskRequest) -> TaskResponse:
     
     api_key = os.getenv("SERPAPI_API_KEY")
     results = []
+    serpapi_request_info = None
+    serpapi_response_data = None
 
     if api_key:
         try:
             url = "https://serpapi.com/search.json"
             req_params = {
                 "engine": "google_flights",
-                "departure_id": params.get("origin"),
-                "arrival_id": params.get("destination"),
+                "departure_id": origin,
+                "arrival_id": destination,
                 "outbound_date": params.get("departure_date"),
                 "currency": "INR",
                 "hl": "en",
@@ -44,9 +126,15 @@ def call_flight_agent(request: TaskRequest) -> TaskResponse:
                 "api_key": api_key
             }
             
+            serpapi_request_info = {
+                "url": url,
+                "params": {k: v for k, v in req_params.items() if k != "api_key"}
+            }
+            
             response = httpx.get(url, params=req_params, timeout=15.0)
             response.raise_for_status()
             data = response.json()
+            serpapi_response_data = data
             
             google_flights_url = data.get("search_metadata", {}).get("google_flights_url", "https://flights.google.com")
             
@@ -79,8 +167,8 @@ def call_flight_agent(request: TaskRequest) -> TaskResponse:
                 stops_str = "Non-stop" if stops_count == 0 else f"Connecting Flight ({stops_count} Stop{'s' if stops_count > 1 else ''})"
                 base_price = f.get("price", 0)
                 
-                origin_code = dep.get('id', params.get('origin', ''))
-                destination_code = arr.get('id', params.get('destination', ''))
+                origin_code = dep.get('id', origin)
+                destination_code = arr.get('id', destination)
                 
                 dep_date = params.get("departure_date", "")   # YYYY-MM-DD
                 adults  = max(1, (params.get("adults_count") or 1))
@@ -222,8 +310,8 @@ def call_flight_agent(request: TaskRequest) -> TaskResponse:
                     "arrival_date": format_date(arr_time_raw) if arr_time_raw else params.get("departure_date"),
                     "departure_time": format_time(dep_time_raw) if dep_time_raw else "00:00",
                     "arrival_time": format_time(arr_time_raw) if arr_time_raw else "00:00",
-                    "origin_airport": f"{dep.get('name', 'Origin')} ({dep.get('id', params.get('origin'))})",
-                    "destination_airport": f"{arr.get('name', 'Destination')} ({arr.get('id', params.get('destination'))})",
+                    "origin_airport": f"{dep.get('name', 'Origin')} ({dep.get('id', origin)})",
+                    "destination_airport": f"{arr.get('name', 'Destination')} ({arr.get('id', destination)})",
                     "duration": duration,
                     "stops": stops_str,
                     "booking_link": custom_link,
@@ -260,9 +348,19 @@ def call_flight_agent(request: TaskRequest) -> TaskResponse:
     if not results:
         print("No real-time flights found.")
 
+    metadata = {
+        "agent_id": "flight_agent",
+        "timestamp": time.time(),
+        "source": "serpapi" if api_key and results else "mock"
+    }
+    if serpapi_request_info:
+        metadata["serpapi_request"] = serpapi_request_info
+    if serpapi_response_data:
+        metadata["serpapi_response"] = serpapi_response_data
+
     return TaskResponse(
         task_id=request.task_id,
         status="success",
         results=results,
-        metadata={"agent_id": "flight_agent", "timestamp": time.time(), "source": "serpapi" if api_key and results else "mock"}
+        metadata=metadata
     )
