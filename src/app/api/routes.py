@@ -67,7 +67,12 @@ async def chat_endpoint(request: ChatRequest):
     options_to_show = new_state.get("options_to_show") or []
     current_step = new_state.get("current_step")
     ticket = new_state.get("ticket") if current_step in ["booking_confirmed", "hotel_booking_confirmed"] else None
-    clarification_needed = new_state.get("pending_clarification")
+    is_clarifying = current_step not in [
+        "ready_to_search", "flight_selecting", "hotel_ready_to_search", "hotel_selecting",
+        "booking_confirmed", "hotel_booking_confirmed",
+        "plan_itinerary", "general_qa", "start", None
+    ]
+    clarification_needed = new_state.get("pending_clarification") or is_clarifying
     quick_replies = new_state.get("quick_replies", [])
 
     return ChatResponse(

@@ -38,6 +38,10 @@ class ConversationState(TypedDict):
     hotel_result: Dict[str, Any] | None
     selected_hotel: Dict[str, Any] | None
 
+    # Conversational enhancements
+    interruption_question: str | None
+    clarification_repeats: Dict[str, int] | None
+
 class ExtractedInfo(BaseModel):
     intent: Literal["book_flight", "book_hotel", "general_qa", "select_flight", "select_hotel", "provide_details", "payment_done", "provide_passenger_count", "confirm", "reject"] = "general_qa"
     origin: str | None = None
@@ -59,12 +63,35 @@ class ExtractedInfo(BaseModel):
     hotel_city: str | None = None
     check_in_date: str | None = None
     check_out_date: str | None = None
+    selected_option_index: int | None = Field(description="The index (0-based) of the flight or hotel option the user wants to select from the options presented, or null if they are not selecting an option.", default=None)
 
 try:
     llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
 except Exception as e:
     print(f"Warning: Failed to initialize ChatGroq. {e}")
     llm = None
+
+def is_question(text: str) -> bool:
+    text_clean = text.strip().lower()
+    if "?" in text_clean:
+        return True
+    question_words = ["what", "which", "who", "where", "why", "how", "is", "are", "can", "could", "would", "should", "do", "does", "did", "tell", "show", "describe", "explain", "suggest", "recommend", "weather"]
+    words = re.findall(r"\b\w+\b", text_clean)
+    if words and any(w in question_words for w in words):
+        return True
+    return False
+
+def get_next_flight_step(flight_params: Dict[str, Any], invalid_date: bool = False) -> str:
+    if not flight_params.get("origin") or not flight_params.get("destination"):
+        return "awaiting_origin_dest"
+    elif invalid_date:
+        return "invalid_departure_date"
+    elif not flight_params.get("departure_date"):
+        return "awaiting_departure_date"
+    elif not flight_params.get("journey_type"):
+        return "awaiting_journey_type"
+    else:
+        return "ready_to_search"
 
 def parse_intent(state: ConversationState):
     if not llm:
@@ -104,6 +131,17 @@ def parse_intent(state: ConversationState):
         upcoming_days.append(f"{day.strftime('%A')} ({day.strftime('%Y-%m-%d')})")
     upcoming_str = ", ".join(upcoming_days)
     
+    options_to_show = state.get("options_to_show") or []
+    options_str = ""
+    if options_to_show:
+        options_str = "\n    Suggested Options currently visible to the user:\n"
+        for idx, opt in enumerate(options_to_show):
+            if opt.get("type") == "flight" or "pricing" in opt:
+                pricing_str = ", ".join(f"{p['class']}: {p['price']}" for p in opt.get("pricing", []))
+                options_str += f"    - [Option {idx}] Airline: {opt.get('airline_name')}, Flight No: {opt.get('flight_numbers')}, Dep: {opt.get('departure_time')}, Arr: {opt.get('arrival_time')}, Base Price: {opt.get('price')} ({pricing_str})\n"
+            else:
+                options_str += f"    - [Option {idx}] Hotel: {opt.get('name')}, Rating: {opt.get('star_rating')}, Price per night: {opt.get('price_per_night')}, Amenities: {', '.join(opt.get('amenities', []))}\n"
+
     prompt = f"""You are a helpful travel assistant. Analyze the user's latest message and extract their intent and any travel details.
     
     Current known flight params: {flight_params}
@@ -112,12 +150,13 @@ def parse_intent(state: ConversationState):
     Current Date: {today_date}
     Tomorrow's Date: {tomorrow_date}
     Upcoming 7 days reference: {upcoming_str}
+    {options_str}
     
     Intents:
     - book_flight: user wants to search for flights.
     - book_hotel: user wants to search for hotels.
-    - select_flight: user selects a specific flight and class. YOU MUST extract selected_airline, selected_class, selected_price, and booking_link if present.
-    - select_hotel: user selects a specific hotel.
+    - select_flight: user selects a specific flight and class. You can also match conversational selection (e.g. 'the expensive one', 'indigo', 'the second option') if flights are visible.
+    - select_hotel: user selects a specific hotel. You can also match conversational selection (e.g. 'the cheapest one', 'Royal Hometel', 'the first hotel') if hotels are visible.
     - provide_passenger_count: user tells you how many adults/children/infants. Extract this into adults_count, children_count, infants_count.
     - provide_details: user provides their passenger info (name, email, contact, passport).
     - payment_done: user says payment is done.
@@ -125,14 +164,19 @@ def parse_intent(state: ConversationState):
     - reject: user explicitly says no/wrong.
     - general_qa: anything else.
     
+    Rules for Option Selection:
+    - ONLY classify as 'select_flight' or 'select_hotel' if the user explicitly wants to book, select, choose, or proceed with a specific option (e.g. 'choose the expensive one', 'book the cheapest flight', 'select option 1', 'let's go with Indigo').
+    - If the user is just asking a question about the options to compare them or seek information (e.g., 'which is the expensive one in this?', 'which is the cheapest?', 'what is the Indigo flight's duration?', 'which is the highest rated hotel?'), classify the intent as 'general_qa' (not select_flight or select_hotel), so we can answer their question without proceeding to selection.
+    - If the user is selecting an option, populate 'selected_option_index' with the 0-based index of the selected option, and if they specify a class like 'economy' or 'business', extract it into 'selected_class'.
+
     Rules for Date Extraction:
     - ALWAYS convert departure_date, check_in_date, and check_out_date strictly to YYYY-MM-DD format.
     - If the user says "next [day]" (e.g., "next monday"), use the exact date for that day from the "Upcoming 7 days reference". Do NOT add an extra week.
     - Convert all origin and destination cities/countries/airports strictly to their most prominent 3-letter IATA airport code.
-      - If a country is provided (e.g., 'India', 'France'), output its major international airport code (e.g., 'DEL' for India, 'CDG' for France).
-      - If a city has multiple airports, output the primary airport code (e.g., 'LHR' for London, 'JFK' for New York) or the city code.
-      - Be extremely careful with spelling and similar-sounding names (e.g., 'Mangalore' is 'IXE' and must not be confused with 'Bangalore' 'BLR'; 'Goa' is 'GOI' and not 'Genoa'; 'Manali' is 'KUU' (Kullu) and MUST NOT be confused with 'Belagavi' 'IXG').
-      - Use your comprehensive knowledge to map ANY global city or country correctly."""
+    - If a country is provided (e.g., 'India', 'France'), output its major international airport code (e.g., 'DEL' for India, 'CDG' for France).
+    - If a city has multiple airports, output the primary airport code (e.g., 'LHR' for London, 'JFK' for New York) or the city code.
+    - Be extremely careful with spelling and similar-sounding names (e.g., 'Mangalore' is 'IXE' and must not be confused with 'Bangalore' 'BLR'; 'Goa' is 'GOI' and not 'Genoa'; 'Manali' is 'KUU' (Kullu) and MUST NOT be confused with 'Belagavi' 'IXG').
+    - Use your comprehensive knowledge to map ANY global city or country correctly."""
     
     messages = [SystemMessage(content=prompt)] + recent_messages
     
@@ -265,8 +309,46 @@ def parse_intent(state: ConversationState):
         except Exception as e:
             print(f"Error parsing manual flight selection: {e}")
             
+    elif result.intent in ["select_flight", "select_hotel"] and result.selected_option_index is not None and 0 <= result.selected_option_index < len(options_to_show):
+        opt = options_to_show[result.selected_option_index]
+        if opt.get("type") == "flight" or "pricing" in opt:
+            result.intent = "select_flight"
+            pricing = opt.get("pricing", [])
+            selected_cls = "Economy"
+            selected_pr = opt.get("price")
+            for p in pricing:
+                if result.selected_class and result.selected_class.lower() in p["class"].lower():
+                    selected_cls = p["class"]
+                    selected_pr = p["price"]
+                    break
+            if not selected_pr and pricing:
+                selected_cls = pricing[0]["class"]
+                selected_pr = pricing[0]["price"]
+            
+            selected_flight["class"] = selected_cls
+            selected_flight["airline"] = opt.get("airline_name")
+            selected_flight["price"] = selected_pr
+            selected_flight["booking_link"] = opt.get("booking_link") or "https://flights.google.com"
+            selected_flight["flight_numbers"] = opt.get("flight_numbers", "N/A")
+            selected_flight["departure_time"] = opt.get("departure_time", "00:00")
+            selected_flight["arrival_time"] = opt.get("arrival_time", "00:00")
+            selected_flight["origin_airport"] = opt.get("origin_airport", "Origin")
+            selected_flight["destination_airport"] = opt.get("destination_airport", "Destination")
+            selected_flight["airline_logo"] = opt.get("airline_logo", "")
+            selected_flight["airline_name"] = opt.get("airline_name")
+        else:
+            result.intent = "select_hotel"
+            selected_hotel["name"] = opt.get("name")
+            selected_hotel["price"] = opt.get("price_per_night")
+            selected_hotel["booking_link"] = opt.get("booking_url") or "https://booking.com"
+            selected_hotel["star_rating"] = opt.get("star_rating", "3-star")
+            selected_hotel["amenities"] = opt.get("amenities", [])
+            
     if step == "awaiting_passenger_count" and not user_msg_text.startswith("I would like to select "):
-        result.intent = "provide_passenger_count"
+        if result.intent in ["general_qa", "select_flight", "select_hotel"] and is_question(user_msg_text):
+            pass
+        else:
+            result.intent = "provide_passenger_count"
             
     is_confirmation = result.intent == "confirm" or msg_text_lower in ["yes", "y", "yeah", "correct", "right", "ok", "okay", "sure", "proceed"] or "yes" in msg_text_lower
     is_rejection = result.intent == "reject" or msg_text_lower in ["no", "n", "nope", "wrong", "wait"] or "no" in msg_text_lower
@@ -296,6 +378,8 @@ def parse_intent(state: ConversationState):
                 pending_clarification = "⚠️ Validation Error:\n- Please enter a valid number of days (e.g. 3 or '5 days')."
         else:
             pass
+    elif step in ["awaiting_origin_dest", "awaiting_departure_date", "invalid_departure_date", "awaiting_journey_type"]:
+        step = get_next_flight_step(flight_params, invalid_date)
     elif step != "verify_passenger_count" and result.intent == "select_flight":
         if result.selected_airline and not user_msg_text.startswith("I would like to select "): selected_flight["airline"] = result.selected_airline
         if result.selected_class and not user_msg_text.startswith("I would like to select "): selected_flight["class"] = result.selected_class
@@ -542,13 +626,23 @@ def parse_intent(state: ConversationState):
             
     # Check if we are in an active booking details-gathering step
     is_gathering_details = step in [
-        "awaiting_origin_dest", "awaiting_departure_date", "awaiting_journey_type",
+        "awaiting_origin_dest", "awaiting_departure_date", "invalid_departure_date", "awaiting_journey_type",
         "awaiting_passenger_count", "awaiting_passenger_details", "verify_passenger_count",
         "awaiting_payment", "hotel_confirm_city", "hotel_confirm_dates"
-    ] or step.startswith("hotel_awaiting_")
+    ] or (step is not None and step.startswith("hotel_awaiting_"))
 
-    if result.intent == "general_qa" and not is_gathering_details:
+    is_active_flow = is_gathering_details or step in [
+        "ready_to_search", "flight_selecting", "booking_confirmed", "hotel_ready_to_search", "hotel_selecting", 
+        "hotel_summary", "hotel_awaiting_payment", "hotel_booking_confirmed",
+        "itinerary_awaiting_days", "plan_itinerary"
+    ]
+
+    interruption_question = None
+    if result.intent == "general_qa" and not is_active_flow:
         step = "general_qa"
+    elif result.intent == "general_qa" and is_active_flow:
+        if is_question(user_msg_text):
+            interruption_question = user_msg_text
         
     elif (result.intent == "book_hotel" or user_msg_text.strip().lower() == "book a hotel" or "hotel" in msg_text_lower) and not is_gathering_details:
         if flight_params.get("destination") or selected_flight.get("airline_name"):
@@ -556,22 +650,8 @@ def parse_intent(state: ConversationState):
         else:
             step = "hotel_awaiting_city"
             
-    elif (result.intent == "book_flight" or flight_params.get("origin")) and not is_gathering_details:
-        if not flight_params.get("origin") or not flight_params.get("destination"):
-            step = "awaiting_origin_dest"
-        elif invalid_date:
-            step = "invalid_departure_date"
-        elif not flight_params.get("departure_date"):
-            step = "awaiting_departure_date"
-        elif not flight_params.get("journey_type"):
-            step = "awaiting_journey_type"
-        else:
-            step = "ready_to_search"
-            
-    else:
-        if step not in ["awaiting_passenger_details", "awaiting_passenger_count", "verify_passenger_count", "awaiting_payment", "booking_confirmed"]:
-            if not step.startswith("hotel_") and step != "hotel_booking_confirmed":
-                step = "general_qa"
+    elif result.intent == "book_flight" and not is_gathering_details:
+        step = get_next_flight_step(flight_params, invalid_date)
         
     return {
         "current_step": step,
@@ -584,7 +664,9 @@ def parse_intent(state: ConversationState):
         "current_passenger_index": current_passenger_index,
         "hotel_params": hotel_params,
         "selected_hotel": selected_hotel,
-        "pending_clarification": pending_clarification
+        "pending_clarification": pending_clarification,
+        "interruption_question": interruption_question,
+        "clarification_repeats": state.get("clarification_repeats") or {}
     }
 
 def route_next(state: ConversationState):
@@ -608,6 +690,55 @@ def ask_clarification(state: ConversationState):
     replies = []
     options = []
     
+    # Conversational QA interruption handling
+    interruption_question = state.get("interruption_question")
+    interruption_answer = ""
+    if interruption_question and llm:
+        options_to_show = state.get("options_to_show") or []
+        options_context = ""
+        if options_to_show:
+            options_context = "\nOptions currently visible to the user on their screen:\n"
+            for idx, opt in enumerate(options_to_show):
+                if opt.get("type") == "flight" or "pricing" in opt:
+                    pricing_str = ", ".join(f"{p['class']}: {p['price']}" for p in opt.get("pricing", []))
+                    options_context += f"- Flight Option {idx}: Airline {opt.get('airline_name')} flight {opt.get('flight_numbers')}, base price {opt.get('price')} ({pricing_str})\n"
+                else:
+                    options_context += f"- Hotel Option {idx}: Hotel {opt.get('name')}, rating {opt.get('star_rating')}, price per night {opt.get('price_per_night')}, amenities {', '.join(opt.get('amenities', []))}\n"
+
+        qa_prompt = f"""You are a specialized travel assistant chatbot.
+The user is in the middle of a booking flow, and asked a travel-related question: "{interruption_question}"
+Please answer their question directly, accurately, and concisely. Keep your answer strictly under 2 sentences. 
+Do not decline the question if it is travel-related (destination, sightseeing, weather, culture, etc.).
+{options_context}
+"""
+        try:
+            msgs = [SystemMessage(content=qa_prompt)] + state["messages"][-2:]
+            response = llm.invoke(msgs)
+            interruption_answer = response.content.strip() + "\n\n"
+        except Exception as e:
+            print(f"Error generating interruption answer: {e}")
+
+    # Guard repeats: check if we have already repeated the prompt for this step
+    clarification_repeats = state.get("clarification_repeats") or {}
+    repeats = clarification_repeats.get(step or "start", 0)
+
+    def make_response(res_dict):
+        if interruption_answer:
+            prompt_msg = res_dict.get("final_response", "")
+            
+            if step in ["flight_selecting", "hotel_selecting"]:
+                reminder_prefix = "Please select one of the suggested options above to proceed with your booking:\n"
+                options_to_keep = res_dict.get("options_to_show") or options
+                res_dict["options_to_show"] = options_to_keep
+            else:
+                reminder_prefix = "Could you please answer this to proceed with your booking?\n"
+                
+            res_dict["final_response"] = f"{interruption_answer.strip()}\n\n{reminder_prefix}{prompt_msg}"
+        
+        res_dict["interruption_question"] = None
+        res_dict["clarification_repeats"] = clarification_repeats
+        return res_dict
+    
     # If the user goes off-topic or says something conversational/harsh, handle it dynamically
     if step == "general_qa":
         if llm:
@@ -629,7 +760,7 @@ Guidelines:
         else:
             msg = "I'm here to help you with your travel bookings! Could we get back to that?"
             
-        return {"final_response": msg, "quick_replies": [], "options_to_show": []}
+        return make_response({"final_response": msg, "quick_replies": [], "options_to_show": []})
         
     if step == "awaiting_origin_dest":
         msg = "I can help with that! Where are you flying from and to?"
@@ -642,6 +773,9 @@ Guidelines:
     elif step == "awaiting_journey_type":
         msg = "Are you planning a one-way or return journey?"
         replies = ["One Way", "Round Trip"]
+    elif step == "flight_selecting":
+        msg = "Here are the flight options. Click to choose your preferred one."
+        options = state.get("options_to_show") or []
         
     elif step == "hotel_confirm_city":
         dest = flight_params.get("destination", "Pune")
@@ -790,7 +924,7 @@ Guidelines:
         }
         
         msg = f"🎉 Payment Successful! Booking Confirmed. 🎉\n\nYour stay at {selected_hotel.get('name')} is confirmed with reservation number {pnr}."
-        return {"final_response": msg, "quick_replies": ["Book a Flight", "Plan an Itinerary"], "options_to_show": [], "ticket": hotel_ticket}
+        return make_response({"final_response": msg, "quick_replies": ["Book a Flight", "Plan an Itinerary"], "options_to_show": [], "ticket": hotel_ticket})
         
     elif step == "awaiting_passenger_count":
         msg = "How many adults, children, and infants will be traveling? For instance, you could say '2 adults, 2 children, 1 infant'."
@@ -867,7 +1001,7 @@ Guidelines:
         if days > 0 and str(days) not in ["3", "5", "7"]:
             replies.append(f"{days} Days")
             
-        return {"final_response": msg, "quick_replies": replies, "options_to_show": []}
+        return make_response({"final_response": msg, "quick_replies": replies, "options_to_show": []})
 
     elif step == "plan_itinerary":
         flight = state.get("selected_flight") or {}
@@ -900,7 +1034,7 @@ Guidelines:
         msg = response.content
         
         replies = ["Book a Flight", "Book a Hotel"]
-        return {"final_response": msg, "quick_replies": replies, "options_to_show": []}
+        return make_response({"final_response": msg, "quick_replies": replies, "options_to_show": []})
         
     elif step == "booking_confirmed":
         flight = state.get("selected_flight", {})
@@ -913,7 +1047,7 @@ Guidelines:
         
         if hotel.get("name"):
             msg = f"🎉 Payment Successful! Booking Confirmed. 🎉\n\nYour stay at {hotel.get('name')} is confirmed with reservation number {pnr}."
-            return {"final_response": msg, "quick_replies": ["Book a Flight", "Plan an Itinerary"], "options_to_show": []}
+            return make_response({"final_response": msg, "quick_replies": ["Book a Flight", "Plan an Itinerary"], "options_to_show": []})
             
         # Determine the origin and destination based on the flight result if possible
         origin = state.get("flight_params", {}).get("origin", "Origin")
@@ -943,9 +1077,9 @@ Guidelines:
         }
             
         msg = f"🎉 Payment Successful! Booking Confirmed. 🎉\n\nI have generated your flight ticket below. Have a great trip!"
-        return {"final_response": msg, "quick_replies": ["Book a Hotel", "Plan an Itinerary"], "options_to_show": [], "ticket": ticket}
+        return make_response({"final_response": msg, "quick_replies": ["Book a Hotel", "Plan an Itinerary"], "options_to_show": [], "ticket": ticket})
 
-    return {"final_response": msg, "quick_replies": replies, "options_to_show": options, "pending_clarification": None}
+    return make_response({"final_response": msg, "quick_replies": replies, "options_to_show": options, "pending_clarification": None})
 
 def flight_node(state: ConversationState):
     request = TaskRequest(
@@ -963,7 +1097,7 @@ def flight_node(state: ConversationState):
             options.append(r)
             
     final_text = "Here are the flight options. Click to choose your preferred one." if options else "Sorry, we do not have any flights available on the searched date."
-    return {"final_response": final_text, "options_to_show": options, "quick_replies": [], "flight_result": response.model_dump()}
+    return {"final_response": final_text, "options_to_show": options, "quick_replies": [], "flight_result": response.model_dump(), "current_step": "flight_selecting"}
 
 def hotel_node(state: ConversationState):
     request = TaskRequest(
