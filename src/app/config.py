@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     SARVAM_API_KEY: str = ""
     
     # Optional parameters
-    LLM_MODEL: str = "llama-3.3-70b-versatile"
+    LLM_MODEL: str = "llama-3.1-8b-instant"
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

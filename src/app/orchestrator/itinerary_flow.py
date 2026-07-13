@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Dict, Any
 from langchain_core.messages import SystemMessage
 from app.orchestrator.nlu_parser import llm
+from app.config import settings
 
 def get_itinerary_contextual_reminder(step: str, state: Dict[str, Any]) -> str | None:
     hotel_params = state.get("hotel_params") or {}
@@ -119,8 +120,8 @@ Start the itinerary now with Day 1 and go all the way through Day {itinerary_day
 
         try:
             from langchain_groq import ChatGroq
-            # Use a more capable model for richer itinerary generation
-            itinerary_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.4, max_tokens=4096)
+            # Use the configured model
+            itinerary_llm = ChatGroq(model=settings.LLM_MODEL, temperature=0.4, max_tokens=4096)
             response = itinerary_llm.invoke([SystemMessage(content=itinerary_prompt)])
             msg = response.content
         except Exception:

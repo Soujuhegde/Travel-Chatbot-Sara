@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage, BaseMessage
 from langchain_groq import ChatGroq
 from app.orchestrator.flight_flow import get_next_flight_step
+from app.config import settings
 
 class ExtractedInfo(BaseModel):
     intent: Literal["book_flight", "book_hotel", "general_qa", "select_flight", "select_hotel", "provide_details", "payment_done", "provide_passenger_count", "confirm", "reject"] = "general_qa"
@@ -31,9 +32,9 @@ class ExtractedInfo(BaseModel):
     selected_option_index: int | None = Field(description="The index (0-based) of the flight or hotel option the user wants to select from the options presented, or null if they are not selecting an option.", default=None)
 
 try:
-    llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
+    llm = ChatGroq(model=settings.LLM_MODEL, temperature=0)
 except Exception as e:
-    print(f"Warning: Failed to initialize ChatGroq. {e}")
+    print(f"Warning: Failed to initialize ChatGroq with model {settings.LLM_MODEL}. {e}")
     llm = None
 
 def is_question(text: str) -> bool:
