@@ -13,15 +13,15 @@ class ExtractedInfo(BaseModel):
     destination: str | None = Field(description="The 3-letter IATA code of the destination city or airport (e.g. 'BLR', 'DEL', 'JFK', 'TYO'). ALWAYS convert full city or country names to their primary 3-letter IATA code.", default=None)
     departure_date: str | None = None
     limit: int | None = Field(description="The number of flights the user wants to see, if they explicitly mention a number (e.g. 'show me 5 flights').", default=None)
-    journey_type: Literal["One Way", "Round Trip"] | None = None
+    journey_type: Literal["One Way", "Round Trip"] | None = Field(description="The type of journey. ONLY populate this if the user explicitly mentions 'one way', 'round trip', 'return', 'single ticket', etc. Otherwise, set to null.", default=None)
     selected_class: str | None = None
     selected_airline: str | None = None
     selected_price: Optional[str] = Field(description="The price of the flight", default=None)
     booking_link: Optional[str] = Field(description="The booking URL link if provided in the message", default=None)
-    passenger_name: Optional[str] = Field(description="Name of the passenger", default=None)
-    passenger_email: str | None = None
-    passenger_contact: str | None = None
-    passenger_passport: str | None = None
+    passenger_name: Optional[str] = Field(description="Name of the passenger. ONLY extract this if it is explicitly provided in the latest user message. Do NOT carry over names from previous messages in the history.", default=None)
+    passenger_email: str | None = Field(description="Email of the passenger. ONLY extract this if it is explicitly provided in the latest user message. Do NOT carry over emails from previous messages in the history.", default=None)
+    passenger_contact: str | None = Field(description="Contact/phone of the passenger. ONLY extract this if it is explicitly provided in the latest user message. Do NOT carry over contacts from previous messages in the history.", default=None)
+    passenger_passport: str | None = Field(description="Passport number of the passenger. ONLY extract this if it is explicitly provided in the latest user message. Do NOT carry over passports from previous messages in the history.", default=None)
     adults_count: int | None = None
     children_count: int | None = None
     infants_count: int | None = None
@@ -50,7 +50,12 @@ def parse_intent(state: Dict[str, Any]) -> Dict[str, Any]:
     if not llm:
         return {"current_step": "general_qa", "final_response": "LLM not configured."}
     
-    recent_messages = state["messages"][-5:]
+    step = state.get("current_step")
+    from langchain_core.messages import HumanMessage
+    if step in ["awaiting_passenger_details", "hotel_awaiting_guest_name", "hotel_awaiting_guest_email", "hotel_awaiting_guest_phone"]:
+        recent_messages = [HumanMessage(content=state["messages"][-1].content)]
+    else:
+        recent_messages = state["messages"][-5:]
     flight_params = state.get("flight_params") or {}
     passenger_details = state.get("passenger_details") or {}
     selected_flight = state.get("selected_flight") or {}
@@ -129,7 +134,11 @@ def parse_intent(state: Dict[str, Any]) -> Dict[str, Any]:
     - If a country is provided (e.g., 'India', 'France'), output its major international airport code (e.g., 'DEL' for India, 'CDG' for France).
     - If a city has multiple airports, output the primary airport code (e.g., 'LHR' for London, 'JFK' for New York) or the city code.
     - Be extremely careful with spelling and similar-sounding names (e.g., 'Mangalore' is 'IXE' and must not be confused with 'Bangalore' 'BLR'; 'Goa' is 'GOI' and not 'Genoa'; 'Manali' is 'KUU' (Kullu) and MUST NOT be confused with 'Belagavi' 'IXG').
-    - Use your comprehensive knowledge to map ANY global city or country correctly."""
+    - Use your comprehensive knowledge to map ANY global city or country correctly.
+    
+    Rules for Passenger Details Extraction:
+    - ONLY extract passenger_name, passenger_email, passenger_contact, and passenger_passport if they are explicitly written in the latest user message. 
+    - DO NOT extract or repeat details from previous messages in the history. If a detail is missing in the latest message, leave it as null."""
     
     messages = [SystemMessage(content=prompt)] + recent_messages
     
@@ -467,7 +476,14 @@ def parse_intent(state: Dict[str, Any]) -> Dict[str, Any]:
         current_passenger_index = 0
         step = "verify_passenger_count"
             
-    elif not step.startswith("hotel_") and step != "hotel_booking_confirmed" and (result.intent == "provide_details" or (step == "awaiting_passenger_details" and result.intent != "general_qa")):
+    elif not step.startswith("hotel_") and step != "hotel_booking_confirmed" and (
+        result.intent == "provide_details" or 
+        (step == "awaiting_passenger_details" and (
+            result.intent != "general_qa" or 
+            any([result.passenger_name, result.passenger_email, result.passenger_contact, result.passenger_passport])
+        ))
+    ):
+        result.intent = "provide_details"
         total_pax = passenger_count.get("total") or 1
         
         if current_passenger_index >= len(passengers_details):
@@ -478,31 +494,36 @@ def parse_intent(state: Dict[str, Any]) -> Dict[str, Any]:
         
         if result.passenger_name:
             name_clean = result.passenger_name.strip()
-            if len(name_clean) >= 2:
-                pax["name"] = name_clean
-            else:
-                errors.append("Name must be at least 2 characters long.")
+            if name_clean.lower() in user_msg_text.lower():
+                if len(name_clean) >= 2:
+                    pax["name"] = name_clean
+                else:
+                    errors.append("Name must be at least 2 characters long.")
                 
         if result.passenger_email:
             email_clean = result.passenger_email.strip()
-            if re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", email_clean):
-                pax["email"] = email_clean
-            else:
-                errors.append("Email address is invalid.")
+            if email_clean.lower() in user_msg_text.lower():
+                if re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", email_clean):
+                    pax["email"] = email_clean
+                else:
+                    errors.append("Email address is invalid.")
                 
         if result.passenger_contact:
             contact_clean = re.sub(r"[^\d+]", "", result.passenger_contact.strip())
-            if re.match(r"^\+?\d{1,4}\d{10}$", contact_clean):
-                pax["contact"] = contact_clean
-            else:
-                errors.append("Contact number must include a country code followed strictly by 10 digits (e.g. +919876543210).")
+            user_msg_digits = re.sub(r"[^\d+]", "", user_msg_text)
+            if contact_clean in user_msg_digits or result.passenger_contact.strip() in user_msg_text:
+                if re.match(r"^\+?\d{1,4}\d{10}$", contact_clean):
+                    pax["contact"] = contact_clean
+                else:
+                    errors.append("Contact number must include a country code followed strictly by 10 digits (e.g. +919876543210).")
                 
         if result.passenger_passport:
             passport_clean = re.sub(r"\s+", "", result.passenger_passport.strip())
-            if len(passport_clean) >= 6 and len(passport_clean) <= 15 and passport_clean.isalnum():
-                pax["passport"] = passport_clean.upper()
-            else:
-                errors.append("Passport number must be 6-15 alphanumeric characters.")
+            if passport_clean.lower() in user_msg_text.lower().replace(" ", ""):
+                if len(passport_clean) >= 6 and len(passport_clean) <= 15 and passport_clean.isalnum():
+                    pax["passport"] = passport_clean.upper()
+                else:
+                    errors.append("Passport number must be 6-15 alphanumeric characters.")
         
         if errors:
             pending_clarification = "⚠️ Validation Error:\n" + "\n".join([f"- {err}" for err in errors])
@@ -519,7 +540,20 @@ def parse_intent(state: Dict[str, Any]) -> Dict[str, Any]:
                 step = "awaiting_passenger_details"
                 
     elif result.intent == "payment_done" or user_msg_text.strip().lower() == "payment done":
-        if step in ["hotel_awaiting_payment", "hotel_summary"] or (step == "awaiting_payment" and selected_hotel.get("name")):
+        total_pax = passenger_count.get("total") or 1
+        details_complete = True
+        if not passengers_details or len(passengers_details) < total_pax:
+            details_complete = False
+        else:
+            for p in passengers_details:
+                if not p.get("name") or not p.get("email") or not p.get("contact") or not p.get("passport"):
+                    details_complete = False
+                    break
+        
+        if not details_complete:
+            pending_clarification = "⚠️ Validation Error:\n- Please complete the passenger details for all passengers before typing 'payment done'."
+            step = "awaiting_passenger_details"
+        elif step in ["hotel_awaiting_payment", "hotel_summary"] or (step == "awaiting_payment" and selected_hotel.get("name")):
             step = "hotel_booking_confirmed"
         else:
             step = "booking_confirmed"

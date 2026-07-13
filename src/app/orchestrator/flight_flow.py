@@ -71,6 +71,7 @@ def handle_flight_clarification(step: str, state: Dict[str, Any]) -> Dict[str, A
         replies = ["One Way", "Round Trip"]
     elif step == "flight_selecting":
         options_to_show = state.get("options_to_show") or []
+        options = options_to_show
         if len(options_to_show) == 1:
             msg = "Here's the flight I found for you based on your request. Would you like to proceed with this one, or see all available options?"
             replies = ["Proceed with this option", "See all options"]

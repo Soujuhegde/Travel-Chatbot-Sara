@@ -179,7 +179,7 @@ Ensure you follow the strict formatting and rules. Do not hallucinate fields.
                     res_dict["options_to_show"] = [single_option]
                     res_dict["followup_quick_replies"] = ["Proceed with this option", "Select another one"]
             elif step in ["flight_selecting", "hotel_selecting"]:
-                res_dict["options_to_show"] = res_dict.get("options_to_show") or options
+                res_dict["options_to_show"] = res_dict.get("options_to_show") or state.get("options_to_show")
                 
         res_dict["interruption_question"] = None
         res_dict["clarification_repeats"] = clarification_repeats

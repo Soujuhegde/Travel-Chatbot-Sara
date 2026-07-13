@@ -126,6 +126,14 @@ def handle_hotel_clarification(step: str, state: Dict[str, Any]) -> Dict[str, An
     elif step == "hotel_awaiting_arrival_time":
         msg = "What is your Estimated Arrival Time? (Optional)"
         replies = ["Skip", "No preference"]
+    elif step == "hotel_selecting":
+        options_to_show = state.get("options_to_show") or []
+        options = options_to_show
+        if len(options_to_show) == 1:
+            msg = "Here is the hotel I found for you. Would you like to proceed with this booking, or see all other options?"
+            replies = ["Proceed with this option", "See other options"]
+        else:
+            msg = "Here are some great hotels for your stay. Click to choose your preferred one."
     elif step == "hotel_summary":
         price_str = selected_hotel.get("price", selected_hotel.get("price_per_night", "₹3,200"))
         try:

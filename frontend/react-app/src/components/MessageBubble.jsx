@@ -377,7 +377,7 @@ const ItineraryTimeline = ({ text, isUser }) => {
 const MessageBubble = ({ message, onQuickReply, onOptionSelect }) => {
   const isUser = message.sender === 'user';
   const hasItinerary = !isUser && parseItinerary(message.text);
-  
+
   return (
     <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'} mb-6`}>
       {/* Bot Avatar */}
@@ -398,7 +398,9 @@ const MessageBubble = ({ message, onQuickReply, onOptionSelect }) => {
                 : 'bg-white text-slate-700 rounded-3xl rounded-tl-sm border border-slate-100'
             }`}
           >
-            <div className="whitespace-pre-wrap leading-relaxed">{renderMessageText(message.text, isUser)}</div>
+            <div className="whitespace-pre-wrap leading-relaxed">
+              {renderMessageText(message.text, isUser)}
+            </div>
           </div>
         )}
         

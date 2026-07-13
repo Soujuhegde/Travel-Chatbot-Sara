@@ -59,6 +59,35 @@ async def chat_endpoint(request: ChatRequest):
     # Run graph
     new_state = graph.invoke(state)
     
+    # Send booking confirmation email asynchronously if confirmed and not already sent
+    current_step = new_state.get("current_step")
+    if current_step == "booking_confirmed" and not new_state.get("flight_email_sent"):
+        pax_list = new_state.get("passengers_details") or []
+        if not pax_list:
+            pax_list = [new_state.get("passenger_details", {})]
+        
+        primary_email = None
+        if pax_list and pax_list[0].get("email"):
+            primary_email = pax_list[0].get("email")
+            
+        if primary_email:
+            import asyncio
+            from app.services.email_service import email_service
+            ticket = new_state.get("ticket") or {}
+            asyncio.create_task(email_service.send_booking_confirmation(primary_email, ticket))
+            new_state["flight_email_sent"] = True
+            
+    elif current_step == "hotel_booking_confirmed" and not new_state.get("hotel_email_sent"):
+        selected_hotel = new_state.get("selected_hotel") or {}
+        primary_email = selected_hotel.get("guest_email")
+        
+        if primary_email:
+            import asyncio
+            from app.services.email_service import email_service
+            ticket = new_state.get("ticket") or {}
+            asyncio.create_task(email_service.send_booking_confirmation(primary_email, ticket))
+            new_state["hotel_email_sent"] = True
+            
     final_resp = new_state.get("final_response", "I encountered an error processing that.")
     # Append bot's response to the context
     from langchain_core.messages import AIMessage

@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     SERPAPI_API_KEY: str = ""
     BREVO_API_KEY: str = ""
+    BREVO_SENDER_EMAIL: str = "bookings@sarachotbot.local"
     SARVAM_API_KEY: str = ""
     
     # Optional parameters

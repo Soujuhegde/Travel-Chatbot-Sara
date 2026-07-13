@@ -145,7 +145,8 @@ const ChatInterface = ({ onFlowChange }) => {
       const errorMessage = {
         id: Date.now(),
         sender: 'bot',
-        text: "I'm sorry, I'm having trouble connecting to my servers right now."
+        text: "I'm sorry, I'm having trouble connecting to my servers right now.",
+        isError: true
       };
       setMessages([errorMessage]);
     } finally {
@@ -254,7 +255,7 @@ const ChatInterface = ({ onFlowChange }) => {
   return (
     <div className="flex flex-col h-full bg-slate-50/50">
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
-        {messages.map((msg) => (
+        {messages.map((msg, index) => (
           <MessageBubble 
             key={msg.id} 
             message={msg} 
