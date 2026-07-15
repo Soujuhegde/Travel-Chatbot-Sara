@@ -98,19 +98,39 @@ def sanitize_iata_code(name: str) -> str:
         return name_clean.upper()
     return name.upper()
 
-def call_flight_agent(request: TaskRequest) -> TaskResponse:
-    params = request.parameters
-    
+from typing import TypedDict, List, Dict, Any, Optional
+from langgraph.graph import StateGraph, START, END
+
+class FlightAgentState(TypedDict):
+    task_id: str
+    session_id: str
+    parameters: Dict[str, Any]
+    metadata: Dict[str, Any]
+    status: str
+    results: List[Dict[str, Any]]
+    clarification_needed: Optional[str]
+    error: Optional[str]
+    serpapi_request_info: Optional[Dict[str, Any]]
+    serpapi_response_data: Optional[Dict[str, Any]]
+
+def validate_node(state: FlightAgentState) -> Dict[str, Any]:
+    params = state.get("parameters") or {}
     origin = sanitize_iata_code(params.get("origin"))
     destination = sanitize_iata_code(params.get("destination"))
+    departure_date = params.get("departure_date")
     
-    if not origin or not destination or not params.get("departure_date"):
-        return TaskResponse(
-            task_id=request.task_id,
-            status="needs_clarification",
-            clarification_needed="I need the origin, destination, and departure date to search for flights.",
-            metadata={"agent_id": "flight_agent", "timestamp": time.time()}
-        )
+    if not origin or not destination or not departure_date:
+        return {
+            "status": "needs_clarification",
+            "clarification_needed": "I need the origin, destination, and departure date to search for flights."
+        }
+    return {"status": "success"}
+
+def search_node(state: FlightAgentState) -> Dict[str, Any]:
+    params = state.get("parameters") or {}
+    origin = sanitize_iata_code(params.get("origin"))
+    destination = sanitize_iata_code(params.get("destination"))
+    departure_date = params.get("departure_date")
     
     api_key = os.getenv("SERPAPI_API_KEY")
     results = []
@@ -124,7 +144,7 @@ def call_flight_agent(request: TaskRequest) -> TaskResponse:
                 "engine": "google_flights",
                 "departure_id": origin,
                 "arrival_id": destination,
-                "outbound_date": params.get("departure_date"),
+                "outbound_date": departure_date,
                 "currency": "INR",
                 "hl": "en",
                 "type": "2",
@@ -355,23 +375,68 @@ def call_flight_agent(request: TaskRequest) -> TaskResponse:
         except Exception as e:
             print(f"SerpAPI Error: {e}")
 
-    # If no results were found (past date, API error, etc.), do not fallback to mock data as per user request.
     if not results:
         print("No real-time flights found.")
+        
+    return {
+        "results": results,
+        "serpapi_request_info": serpapi_request_info,
+        "serpapi_response_data": serpapi_response_data
+    }
 
+def format_node(state: FlightAgentState) -> Dict[str, Any]:
+    return {}
+
+def route_flight_agent(state: FlightAgentState):
+    if state.get("status") == "needs_clarification":
+        return "format_node"
+    return "search_node"
+
+builder = StateGraph(FlightAgentState)
+builder.add_node("validate_node", validate_node)
+builder.add_node("search_node", search_node)
+builder.add_node("format_node", format_node)
+
+builder.add_edge(START, "validate_node")
+builder.add_conditional_edges("validate_node", route_flight_agent, {
+    "format_node": "format_node",
+    "search_node": "search_node"
+})
+builder.add_edge("search_node", "format_node")
+builder.add_edge("format_node", END)
+
+flight_agent_graph = builder.compile()
+
+def call_flight_agent(request: TaskRequest) -> TaskResponse:
+    initial_state = {
+        "task_id": request.task_id,
+        "session_id": request.session_id,
+        "parameters": request.parameters,
+        "metadata": request.metadata,
+        "status": "success",
+        "results": [],
+        "clarification_needed": None,
+        "error": None,
+        "serpapi_request_info": None,
+        "serpapi_response_data": None
+    }
+    output = flight_agent_graph.invoke(initial_state)
+    
     metadata = {
         "agent_id": "flight_agent",
         "timestamp": time.time(),
-        "source": "serpapi" if api_key and results else "mock"
+        "source": "serpapi" if os.getenv("SERPAPI_API_KEY") and output["results"] else "mock"
     }
-    if serpapi_request_info:
-        metadata["serpapi_request"] = serpapi_request_info
-    if serpapi_response_data:
-        metadata["serpapi_response"] = serpapi_response_data
-
+    if output["serpapi_request_info"]:
+        metadata["serpapi_request"] = output["serpapi_request_info"]
+    if output["serpapi_response_data"]:
+        metadata["serpapi_response"] = output["serpapi_response_data"]
+        
     return TaskResponse(
-        task_id=request.task_id,
-        status="success",
-        results=results,
+        task_id=output["task_id"],
+        status=output["status"],
+        results=output["results"],
+        clarification_needed=output["clarification_needed"],
+        error=output["error"],
         metadata=metadata
     )

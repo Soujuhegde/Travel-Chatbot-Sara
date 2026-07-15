@@ -66,21 +66,22 @@ travel-chatbot/
 ├── src/
 │   ├── app/
 │   │   ├── agents/
-│   │   │   ├── flight_agent.py   # Resolves IATA codes and requests SerpAPI flights (cache-enabled)
-│   │   │   └── hotel_agent.py    # Requests SerpAPI hotels with Mock fallback (cache-enabled)
+│   │   │   ├── flight_agent.py   # Flight Agent LangGraph StateGraph (validate, search, format nodes)
+│   │   │   └── hotel_agent.py    # Hotel Agent LangGraph StateGraph (validate, search, format nodes)
 │   │   ├── api/
 │   │   │   └── routes.py         # /api/chat FastAPI endpoint and session cache loader
 │   │   ├── db/
 │   │   │   ├── checkpointer.py   # SQLite StateGraph checkpointer config
 │   │   │   └── database.py       # Pydantic base settings DB setup
 │   │   ├── orchestrator/
-│   │   │   ├── graph.py          # StateGraph definitions and interruption handlers
+│   │   │   ├── graph.py          # Orchestrator StateGraph definitions and interruption handlers
 │   │   │   ├── nlu_parser.py     # Groq LLM parsing, entity extractions, date validations
 │   │   │   ├── flight_flow.py    # Flight sequence logic and ticket compiler
 │   │   │   ├── hotel_flow.py     # Hotel sequence logic and summary invoice compiler
 │   │   │   └── itinerary_flow.py # Luxury day-by-day planner prompt instructions
 │   │   ├── schemas/
-│   │   │   └── chat.py           # Pydantic JSON request/response models
+│   │   │   ├── chat.py           # Pydantic JSON request/response models
+│   │   │   └── state.py          # State schemas (FlightState, HotelState, CommonState, ConversationState)
 │   │   ├── services/
 │   │   │   └── email_service.py  # Dispatches transactional booking confirmations (Brevo)
 │   │   ├── utils/
@@ -94,6 +95,61 @@ travel-chatbot/
 ├── .env.example                  # Template configuration environment
 ├── requirements.txt              # Backend packages
 └── README.md                     # Documentation
+```
+
+---
+
+## 🛡️ Multi-Agent Architecture & A2A Protocol
+
+This system is built as a **multi-agent application** utilizing the **Agent-to-Agent (A2A) protocol** for inter-agent messaging:
+- **Orchestrator Agent (Friendly Assistant)**: The user-facing conversational entry point. It handles natural language parsing, state retention, interruptions, and routes step flows.
+- **Flight & Hotel Sub-Agents**: Specialised domain agents. They do not interact with the user; they receive structured A2A `TaskRequest` messages and return standard A2A `TaskResponse` messages.
+
+### 🎨 Design Decisions
+
+1. **State Partitioning (`state.py`)**:
+   Instead of a monolithic state dict, variables are cleanly isolated into:
+   - `FlightState`: Handles variables relevant only to flight selections (origin, destination, passenger names, ticket PNR).
+   - `HotelState`: Handles hotel selections (city, check-in, check-out, selected hotel).
+   - `CommonState`: Contains common dialogue variables (messages history, active step, NLU extracted intent, interruption status).
+   
+   The main `ConversationState` inherits all three schemas using multiple inheritance (`class ConversationState(CommonState, FlightState, HotelState)`), keeping the orchestrator robust yet modular.
+
+2. **LangGraph Sub-Agents**:
+   Both `flight_agent` and `hotel_agent` are modeled as independent **LangGraph `StateGraph` workflows**, ensuring strict adherence to the assignment deliverables. Each sub-agent features:
+   - **Input Validation Node (`validate_node`)**: Checks for complete inputs and sets `needs_clarification` status if values are missing.
+   - **Search Node (`search_node`)**: Calls the live search provider (SerpAPI with local disk cache) or falls back to local mock data.
+   - **Formatting Node (`format_node`)**: Passes structured results back to the caller.
+
+---
+
+## 📊 Graph Visualisations
+
+Here are the Mermaid flowcharts of the active LangGraph workflows in the chatbot:
+
+### 1. Orchestrator Graph
+```mermaid
+graph TD
+    START((START)) --> parse_intent[parse_intent Node]
+    parse_intent --> route_next{route_next Router}
+    route_next -- "ready_to_search" --> flight_node[flight_node]
+    route_next -- "hotel_ready_to_search" --> hotel_node[hotel_node]
+    route_next -- "needs clarification / QA" --> ask_clarification[ask_clarification Node]
+    flight_node --> END((END))
+    hotel_node --> END((END))
+    ask_clarification --> END((END))
+```
+
+### 2. Flight / Hotel Sub-Agent Graph
+*(Both sub-agents follow this independent graph pipeline)*
+```mermaid
+graph TD
+    START((START)) --> validate_node[validate_node]
+    validate_node --> route_agent{route_agent Router}
+    route_agent -- "success" --> search_node[search_node]
+    route_agent -- "needs_clarification" --> format_node[format_node]
+    search_node --> format_node
+    format_node --> END((END))
 ```
 
 ---

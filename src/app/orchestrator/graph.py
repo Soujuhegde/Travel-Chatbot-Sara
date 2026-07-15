@@ -9,37 +9,7 @@ from app.orchestrator.flight_flow import flight_node, get_flight_contextual_remi
 from app.orchestrator.hotel_flow import hotel_node, get_hotel_contextual_reminder, handle_hotel_clarification
 from app.orchestrator.itinerary_flow import get_itinerary_contextual_reminder, handle_itinerary_clarification
 
-class ConversationState(TypedDict):
-    messages: List[BaseMessage]
-    session_id: str
-    current_step: str | None
-    latest_intent: str | None
-    flight_params: Dict[str, Any] | None
-    pending_clarification: str | None
-    quick_replies: List[str] | None
-    flight_result: Dict[str, Any] | None
-    final_response: str | None
-    options_to_show: List[Dict[str, Any]] | None
-    selected_flight: Dict[str, Any] | None
-    passenger_details: Dict[str, Any] | None
-    
-    # Multi-passenger flow
-    passenger_count: Dict[str, int] | None
-    passengers_details: List[Dict[str, Any]] | None
-    current_passenger_index: int | None
-    ticket: Dict[str, Any] | None
-    
-    # Hotel flow
-    hotel_params: Dict[str, Any] | None
-    hotel_result: Dict[str, Any] | None
-    selected_hotel: Dict[str, Any] | None
-
-    # Conversational enhancements
-    interruption_question: str | None
-    clarification_repeats: Dict[str, int] | None
-    followup_message: str | None
-    followup_quick_replies: List[str] | None
-    serpapi_calls: List[Dict[str, Any]] | None
+from app.schemas.state import ConversationState, FlightState, HotelState, CommonState
 
 def route_next(state: ConversationState):
     step = state.get("current_step")
